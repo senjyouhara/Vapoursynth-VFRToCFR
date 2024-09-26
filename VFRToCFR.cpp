@@ -5,7 +5,78 @@
 #include <deque>
 #include <fstream>
 #include <string>
-#include<stdio.h>
+#include <stdio.h>
+#include <sstream>
+#include <iomanip>
+#include <codecvt>
+#include <locale>
+
+std::string stringToHex(const std::string& input) {
+	std::stringstream ss;
+	// 使用hex来设置stringstream以16进制输出
+	ss << std::hex << std::setfill('0');
+	for (unsigned char c : input) {
+		ss << std::setw(2) << static_cast<int>(c);
+	}
+	return ss.str();
+}
+
+std::string hexToUtf8(const std::string& hexStr) {
+	if (hexStr.empty() || hexStr.size() % 2 != 0) {
+		throw std::invalid_argument("Invalid hex string");
+	}
+
+	std::string utf8Str;
+	utf8Str.reserve(hexStr.size() / 2); // Assume each pair is one byte
+	std::istringstream iss(hexStr);
+	std::string byteValue;
+
+	while (iss >> std::hex >> byteValue) {
+		utf8Str.push_back(static_cast<unsigned char>(std::stoi(byteValue, 0, 16)));
+	}
+
+	return utf8Str;
+}
+
+std::string HexStringToGBK(const std::string& hexStr) {
+	// 将16进制字符串转换为原始字节序列
+	std::string rawBytes;
+	for (size_t i = 0; i < hexStr.length(); i += 2) {
+		int byte = std::stoi(hexStr.substr(i, 2), 0, 16);
+		rawBytes.push_back(static_cast<char>(byte));
+	}
+
+	int wcharSize = MultiByteToWideChar(CP_UTF8, 0, rawBytes.c_str(), -1, NULL, 0);
+	std::wstring wstr(wcharSize, 0);
+	MultiByteToWideChar(CP_UTF8, 0, rawBytes.c_str(), -1, &wstr[0], wcharSize);
+
+	int gbkSize = WideCharToMultiByte(CP_ACP, 0, wstr.c_str(), -1, NULL, 0, NULL, NULL);
+	std::string gbkStr(gbkSize, 0);
+	WideCharToMultiByte(CP_ACP, 0, wstr.c_str(), -1, &gbkStr[0], gbkSize, NULL, NULL);
+
+	return gbkStr;
+}
+
+std::string GbkToUtf8(const char* src_str)
+{
+	int len = MultiByteToWideChar(CP_ACP, 0, src_str, -1, NULL, 0);
+	wchar_t* wstr = new wchar_t[len + 1];
+	memset(wstr, 0, len + 1);
+	MultiByteToWideChar(CP_ACP, 0, src_str, -1, wstr, len);
+	len = WideCharToMultiByte(CP_UTF8, 0, wstr, -1, NULL, 0, NULL, NULL);
+	char* str = new char[len + 1];
+	memset(str, 0, len + 1);
+	WideCharToMultiByte(CP_UTF8, 0, wstr, -1, str, len, NULL, NULL);
+	std::string strTemp = str;
+	if (wstr) delete[] wstr;
+	if (str) delete[] str;
+	return strTemp;
+}
+
+std::wstring s2ws(const std::string& str) {
+	std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>> converter;
+	return converter.from_bytes(str);
+}
 
 #define EPSILON 0.0005
 
@@ -52,6 +123,7 @@ static void VS_CC VFRToCFRFree(void* instanceData, VSCore* core, const VSAPI* vs
 	delete d;
 };
 
+
 static void VS_CC VFRToCFRCreate(const VSMap* in, VSMap* out, void* userData, VSCore* core, const VSAPI* vsapi) {
 	VFRToCFRData d{ vsapi->propGetNode(in, "clip", 0, 0), *vsapi->getVideoInfo(d.node) };
 	int err;
@@ -67,15 +139,23 @@ static void VS_CC VFRToCFRCreate(const VSMap* in, VSMap* out, void* userData, VS
 	d.drop = !!vsapi->propGetInt(in, "drop", 0, &err);
 	if (err)
 		d.drop = true;
+	//std::locale::global(std::locale(""));//将全局区域设为操作系统默认区域
 
 	std::string timecodes{ vsapi->propGetData(in, "timecodes", 0, &err) };
 
+	std::string  hex = stringToHex(timecodes);
+	std::string gbk = HexStringToGBK(hex);
+	std::string utf8 = GbkToUtf8(gbk.c_str());
+	std::wstring ws = s2ws(utf8);
+	/*vsapi->setError(out, w.c_str.c_str());
+	vsapi->freeNode(d.node);
+	return;*/
+
 	unsigned int count{ 0 };
 	std::deque<timestamp> inTimes;
-	std::fstream file;
-	std::locale::global(std::locale(""));//将全局区域设为操作系统默认区域
-	file.open(timecodes);//可以顺利打开文件了
-	setlocale(LC_ALL, "C");//还原
+	std::ifstream file;
+	file.open(ws);//可以顺利打开文件了
+	//setlocale(LC_ALL, "C");//还原
 	if (!file) {
 		vsapi->setError(out, "Failed to open the timecodes file.");
 		vsapi->freeNode(d.node);
